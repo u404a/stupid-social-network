@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Простая соцсеть / Менеджер постов</title>
+    <!-- Подключаем Firebase (версия 8) -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -171,7 +174,7 @@
 </head>
 <body>
 <div class="app" id="app">
-    <h1>📱 Микросеть <span>менеджер постов</span></h1>
+    <h1>📱 Микросеть <span>облачная</span></h1>
 
     <!-- Блок входа / профиль -->
     <div id="loginBlock" class="login-section">
@@ -203,183 +206,175 @@
     <div class="feed-section">
         <h2>📰 Лента</h2>
         <ul class="post-list" id="feedList">
-            <li class="empty-feed">Пока нет постов. Напишите первый!</li>
+            <li class="empty-feed">Загрузка...</li>
         </ul>
     </div>
 </div>
 
 <script>
-    (function() {
-        // ----- Ключи для localStorage -----
-        const STORAGE_POSTS_KEY = 'simple_social_posts';
-        const STORAGE_USER_KEY = 'simple_social_current_user';
+    // 🔥 ВАША КОНФИГУРАЦИЯ FIREBASE (с добавленным databaseURL)
+    const firebaseConfig = {
+        apiKey: "AIzaSyAtA--ryA4SXNwdor2YB-r24glNsJbzXf4",
+        authDomain: "stupid-social-network.firebaseapp.com",
+        databaseURL: "https://stupid-social-network-default-rtdb.firebaseio.com",
+        projectId: "stupid-social-network",
+        storageBucket: "stupid-social-network.firebasestorage.app",
+        messagingSenderId: "824229398982",
+        appId: "1:824229398982:web:b57bdf644675c7127c0ac7",
+        measurementId: "G-P1JDK2XP7V"
+    };
 
-        // ----- Элементы DOM -----
-        const loginBlock = document.getElementById('loginBlock');
-        const postBlock = document.getElementById('postBlock');
-        const usernameInput = document.getElementById('usernameInput');
-        const loginBtn = document.getElementById('loginBtn');
-        const logoutBtn = document.getElementById('logoutBtn');
-        const currentUserLabel = document.getElementById('currentUserLabel');
-        const postInput = document.getElementById('postInput');
-        const postBtn = document.getElementById('postBtn');
-        const feedList = document.getElementById('feedList');
+    // Инициализация Firebase
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+    const postsRef = database.ref('posts'); // ссылка на узел 'posts' в базе
 
-        // ----- Текущий пользователь (из session, не храним в localStorage постоянно) -----
-        let currentUser = null;
+    // ----- Элементы DOM -----
+    const loginBlock = document.getElementById('loginBlock');
+    const postBlock = document.getElementById('postBlock');
+    const usernameInput = document.getElementById('usernameInput');
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const currentUserLabel = document.getElementById('currentUserLabel');
+    const postInput = document.getElementById('postInput');
+    const postBtn = document.getElementById('postBtn');
+    const feedList = document.getElementById('feedList');
 
-        // ----- Загрузка начальных данных -----
-        function loadInitialUser() {
-            const saved = localStorage.getItem(STORAGE_USER_KEY);
-            if (saved) {
-                currentUser = saved;
-                updateUIBasedOnUser();
+    // Текущий пользователь (сохраняем в localStorage только имя для удобства)
+    let currentUser = localStorage.getItem('simple_social_current_user') || null;
+
+    // ----- Обновление интерфейса по пользователю -----
+    function updateUIBasedOnUser() {
+        if (currentUser) {
+            loginBlock.style.display = 'none';
+            postBlock.style.display = 'block';
+            currentUserLabel.textContent = `👋 ${escapeHtml(currentUser)}`;
+            usernameInput.value = '';
+        } else {
+            loginBlock.style.display = 'block';
+            postBlock.style.display = 'none';
+            postInput.value = '';
+        }
+    }
+
+    // ----- Загрузка постов из Firebase (реальное время) -----
+    function loadPosts() {
+        postsRef.orderByChild('timestamp').on('value', (snapshot) => {
+            const postsData = snapshot.val();
+            const posts = [];
+            if (postsData) {
+                // Преобразуем объект Firebase в массив, сортируем по времени (новые сверху)
+                Object.keys(postsData).forEach(key => {
+                    posts.push({ id: key, ...postsData[key] });
+                });
+                posts.sort((a, b) => b.timestamp - a.timestamp); // новые сверху (по убыванию timestamp)
             }
-        }
-
-        // ----- Сохранение/чтение постов -----
-        function getPosts() {
-            const postsJson = localStorage.getItem(STORAGE_POSTS_KEY);
-            if (postsJson) {
-                try {
-                    return JSON.parse(postsJson);
-                } catch (e) {
-                    return [];
-                }
-            }
-            return [];
-        }
-
-        function savePosts(posts) {
-            localStorage.setItem(STORAGE_POSTS_KEY, JSON.stringify(posts));
-        }
-
-        // ----- Добавление поста -----
-        function addPost(author, content) {
-            if (!author || !content.trim()) return;
-
-            const posts = getPosts();
-            const newPost = {
-                id: Date.now() + '-' + Math.random().toString(36).substr(2, 6),
-                author: author,
-                content: content.trim(),
-                timestamp: new Date().toISOString()
-            };
-            posts.unshift(newPost); // новый пост сверху
-            savePosts(posts);
-            renderFeed();
-        }
-
-        // ----- Форматирование даты (коротко) -----
-        function formatDate(isoString) {
-            const date = new Date(isoString);
-            const now = new Date();
-            const diffMs = now - date;
-            const diffMins = Math.floor(diffMs / 60000);
-            const diffHours = Math.floor(diffMs / 3600000);
-            const diffDays = Math.floor(diffMs / 86400000);
-
-            if (diffMins < 1) return 'только что';
-            if (diffMins < 60) return diffMins + ' мин. назад';
-            if (diffHours < 24) return diffHours + ' ч. назад';
-            if (diffDays === 1) return 'вчера';
-            if (diffDays < 7) return diffDays + ' дн. назад';
-            return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-        }
-
-        // ----- Отрисовка ленты -----
-        function renderFeed() {
-            const posts = getPosts();
-            if (posts.length === 0) {
-                feedList.innerHTML = '<li class="empty-feed">Пока нет постов. Напишите первый!</li>';
-                return;
-            }
-
-            let html = '';
-            posts.forEach(post => {
-                html += `
-                    <li class="post-item">
-                        <div class="post-header">
-                            <span class="post-author">${escapeHtml(post.author)}</span>
-                            <span class="post-date">${formatDate(post.timestamp)}</span>
-                        </div>
-                        <p class="post-content">${escapeHtml(post.content)}</p>
-                    </li>
-                `;
-            });
-            feedList.innerHTML = html;
-        }
-
-        // Простейший escape для безопасности
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // ----- Обновление интерфейса в зависимости от авторизации -----
-        function updateUIBasedOnUser() {
-            if (currentUser) {
-                // Пользователь залогинен
-                loginBlock.style.display = 'none';
-                postBlock.style.display = 'block';
-                currentUserLabel.textContent = `👋 ${escapeHtml(currentUser)}`;
-                // Очищаем поле ввода имени (на всякий случай)
-                usernameInput.value = '';
-            } else {
-                loginBlock.style.display = 'block';
-                postBlock.style.display = 'none';
-                // Очищаем поле ввода поста
-                postInput.value = '';
-            }
-        }
-
-        // ----- Обработчики -----
-        loginBtn.addEventListener('click', () => {
-            const name = usernameInput.value.trim();
-            if (name === '') {
-                alert('Введите имя');
-                return;
-            }
-            currentUser = name;
-            localStorage.setItem(STORAGE_USER_KEY, currentUser);
-            updateUIBasedOnUser();
-            renderFeed(); // на всякий случай
+            renderFeed(posts);
         });
+    }
 
-        logoutBtn.addEventListener('click', () => {
-            currentUser = null;
-            localStorage.removeItem(STORAGE_USER_KEY);
-            updateUIBasedOnUser();
-            renderFeed();
+    // ----- Отрисовка ленты -----
+    function renderFeed(posts) {
+        if (!posts || posts.length === 0) {
+            feedList.innerHTML = '<li class="empty-feed">Пока нет постов. Напишите первый!</li>';
+            return;
+        }
+
+        let html = '';
+        posts.forEach(post => {
+            html += `
+                <li class="post-item">
+                    <div class="post-header">
+                        <span class="post-author">${escapeHtml(post.author)}</span>
+                        <span class="post-date">${formatDate(post.timestamp)}</span>
+                    </div>
+                    <p class="post-content">${escapeHtml(post.content)}</p>
+                </li>
+            `;
         });
+        feedList.innerHTML = html;
+    }
 
-        postBtn.addEventListener('click', () => {
-            if (!currentUser) {
-                alert('Сначала войдите');
-                return;
-            }
-            const content = postInput.value.trim();
-            if (content === '') {
-                alert('Напишите что-нибудь');
-                return;
-            }
-            addPost(currentUser, content);
-            postInput.value = ''; // очистить поле
-        });
+    // ----- Добавление поста в Firebase -----
+    function addPost(author, content) {
+        if (!author || !content.trim()) return;
 
-        // Дополнительно: разрешить Enter в поле поста
-        postInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                postBtn.click();
-            }
-        });
+        const newPost = {
+            author: author,
+            content: content.trim(),
+            timestamp: Date.now() // используем миллисекунды для сортировки
+        };
+        // Сохраняем в Firebase (push генерирует уникальный ключ)
+        postsRef.push(newPost);
+    }
 
-        // Инициация: пробуем загрузить сессию, рендерим ленту
-        loadInitialUser();
-        renderFeed();
-    })();
+    // ----- Форматирование даты (коротко) -----
+    function formatDate(timestamp) {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return 'только что';
+        if (diffMins < 60) return diffMins + ' мин. назад';
+        if (diffHours < 24) return diffHours + ' ч. назад';
+        if (diffDays === 1) return 'вчера';
+        if (diffDays < 7) return diffDays + ' дн. назад';
+        return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    }
+
+    // Простейший escape для безопасности
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // ----- Обработчики -----
+    loginBtn.addEventListener('click', () => {
+        const name = usernameInput.value.trim();
+        if (name === '') {
+            alert('Введите имя');
+            return;
+        }
+        currentUser = name;
+        localStorage.setItem('simple_social_current_user', currentUser);
+        updateUIBasedOnUser();
+    });
+
+    logoutBtn.addEventListener('click', () => {
+        currentUser = null;
+        localStorage.removeItem('simple_social_current_user');
+        updateUIBasedOnUser();
+    });
+
+    postBtn.addEventListener('click', () => {
+        if (!currentUser) {
+            alert('Сначала войдите');
+            return;
+        }
+        const content = postInput.value.trim();
+        if (content === '') {
+            alert('Напишите что-нибудь');
+            return;
+        }
+        addPost(currentUser, content);
+        postInput.value = ''; // очистить поле
+    });
+
+    postInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            postBtn.click();
+        }
+    });
+
+    // Инициализация
+    updateUIBasedOnUser();
+    loadPosts(); // начинаем слушать изменения в Firebase
 </script>
 </body>
+</html>
 </html>
